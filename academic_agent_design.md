@@ -1,7 +1,7 @@
 # 学术 Agent 完整实现方案
 
 > 目标：构建一个真正自主驱动的学术研究 Agent，覆盖从选题调研到论文撰写的完整学术流程。
-> 架构哲学：原生 while 循环 + JSONL 消息总线 + MCP 工具链，彻底抛弃图编排框架。
+> 架构哲学：原生 while 循环 + JSONL 消息总线 + 三层能力体系（MCP 协议层 / Tools 函数接口层 / Skills 策略层），彻底抛弃图编排框架。
 
 ---
 
@@ -14,7 +14,7 @@
    - 3.2 [JSONL 消息总线](#32-jsonl-消息总线)
    - 3.3 [上下文管理器](#33-上下文管理器)
    - 3.4 [阶段状态机](#34-阶段状态机)
-   - 3.5 [MCP 工具层](#35-mcp-工具层)
+   - 3.5 [三层能力架构：MCP / Tools / Skills](#35-三层能力架构mcp--tools--skills)
 4. [学术流程各阶段设计](#4-学术流程各阶段设计)
    - 4.1 [阶段一：选题与文献调研](#41-阶段一选题与文献调研)
    - 4.2 [阶段二：文献精读与整理](#42-阶段二文献精读与整理)
@@ -35,55 +35,56 @@
 
 ## 1. 整体架构概览
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Academic Agent                          │
-│                                                             │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
-│  │  主循环引擎   │───▶│  状态机/阶段  │───▶│  System Prompt│  │
-│  │  (REPL Loop) │    │  管理器      │    │  动态替换     │  │
-│  └──────┬───────┘    └──────────────┘    └──────────────┘  │
-│         │                                                   │
-│  ┌──────▼───────┐    ┌──────────────┐    ┌──────────────┐  │
-│  │  JSONL 消息  │    │  上下文管理器 │    │  MCP Client  │  │
-│  │  总线        │    │  (压缩/截断)  │    │  工具动态加载  │  │
-│  └──────────────┘    └──────────────┘    └──────┬───────┘  │
-└─────────────────────────────────────────────────┼───────────┘
-                                                  │ MCP Protocol
-              ┌───────────────────────────────────┤
-              │                                   │
-    ┌─────────▼──────┐  ┌──────────────┐  ┌──────▼────────┐
-    │  Arxiv MCP     │  │  FileSystem  │  │  Python       │
-    │  Server        │  │  MCP Server  │  │  Interpreter  │
-    │  (搜索/下载论文)│  │  (读写文件)  │  │  MCP Server  │
-    └────────────────┘  └──────────────┘  └───────────────┘
+```mermaid
+graph TD
+    subgraph Agent["Academic Agent"]
+        direction TB
+
+        subgraph Skills["Skills 层 — 阶段 Prompt 与角色定义"]
+            SM["状态机/阶段管理器"]
+            SP["System Prompt 动态替换<br/>(phase_01~07.md)"]
+        end
+
+        subgraph Tools["Tools 层 — LLM 可调用的函数接口"]
+            Loop["主循环引擎 (REPL Loop)"]
+            Bus["JSONL 消息总线"]
+            Ctx["上下文管理器 (压缩/截断)"]
+            TT["transition_to_phase<br/>(内部工具)"]
+        end
+
+        subgraph MCP["MCP 层 — 协议与外部服务器"]
+            Client["MCP Client (工具动态发现)"]
+        end
+
+        Loop --> SM
+        SM --> SP
+        Loop --> Bus
+        Loop --> Ctx
+        Loop --> Client
+        SM --> TT
+    end
+
+    Client -- "MCP Protocol" --> Arxiv["Arxiv MCP Server<br/>(搜索/下载论文)"]
+    Client -- "MCP Protocol" --> FS["FileSystem MCP Server<br/>(读写文件)"]
+    Client -- "MCP Protocol" --> Py["Python Interpreter<br/>MCP Server"]
 ```
 
 **核心数据流**：
 
-```
-用户输入研究课题
-    │
-    ▼
-Agent 主循环启动
-    │
-    ▼
-LLM 生成思考 + 工具调用
-    │
-    ├──▶ 执行 MCP 工具（搜论文/跑代码/读文件）
-    │         │
-    │         ▼
-    │    工具结果追加到 JSONL
-    │
-    ├──▶ 检测阶段切换信号
-    │         │
-    │         ▼
-    │    替换 System Prompt + 工具列表
-    │
-    └──▶ 上下文超限检测
-              │
-              ▼
-         压缩/折叠历史，继续循环
+```mermaid
+flowchart TD
+    A["用户输入研究课题"] --> B["Agent 主循环启动"]
+    B --> C["LLM 生成思考 + 工具调用"]
+    C --> D{"stop_reason?"}
+    D -- "tool_use" --> E["执行 MCP 工具<br/>(搜论文/跑代码/读文件)"]
+    E --> F["工具结果追加到 JSONL"]
+    F --> C
+    D -- "end_turn" --> G["检测阶段切换信号"]
+    G --> H["替换 System Prompt + 工具列表<br/>(Skills 层切换)"]
+    H --> C
+    D -- "max_tokens" --> I["上下文超限检测"]
+    I --> J["压缩/折叠历史"]
+    J --> C
 ```
 
 ---
@@ -473,9 +474,24 @@ class StateMachine:
 
 ---
 
-### 3.5 MCP 工具层
+### 3.5 三层能力架构：MCP / Tools / Skills
 
-MCP Client 负责：启动时发现所有工具、按阶段过滤、执行工具调用。
+本项目的能力体系分为三个独立的层次，各自职责清晰，不可混为一谈：
+
+| 层次 | 职责 | 举例 |
+|------|------|------|
+| **MCP 层**（协议与外部服务器） | 定义传输协议，管理外部 Server 进程的生命周期 | `arxiv-mcp-server`、`server-filesystem`、`mcp-server-python-repl` |
+| **Tools 层**（LLM 可调用函数） | 暴露给 LLM 的 `tool_use` 接口，LLM 通过函数名 + JSON 参数调用 | `arxiv_search`、`read_file`、`execute_python`、`transition_to_phase` |
+| **Skills 层**（阶段 Prompt 与角色定义） | 通过 System Prompt 注入阶段性角色、工作流指令和可用工具列表，定义 Agent 在每个阶段"是谁、能做什么" | `phase_01_survey.md` ~ `phase_07_writing.md` |
+
+**关键区分**：
+- **MCP 是传输层**：它只负责"怎么连接外部能力"，不关心 LLM 看到什么
+- **Tools 是接口层**：它定义"LLM 能调用哪些函数"，有些由 MCP Server 提供（如 `arxiv_search`），有些是内部实现的（如 `transition_to_phase`）
+- **Skills 是策略层**：它决定"在哪个阶段，Agent 扮演什么角色，拥有哪些 Tools"
+
+#### 3.5.1 MCP 层（协议与外部服务器）
+
+MCP Client 负责：启动时连接所有 MCP Server、发现工具 Schema、转发工具调用请求。
 
 ```python
 # mcp/client.py
@@ -484,17 +500,6 @@ import subprocess
 import json
 from pathlib import Path
 import yaml
-
-# 哪些阶段可以用哪些工具
-PHASE_TOOL_PERMISSIONS = {
-    "survey":     ["arxiv_search", "web_search", "read_file", "write_file", "transition_to_phase"],
-    "literature": ["arxiv_search", "download_paper", "read_pdf", "read_file", "write_file", "transition_to_phase"],
-    "arguments":  ["read_file", "write_file", "transition_to_phase"],
-    "innovation": ["read_file", "write_file", "transition_to_phase"],
-    "experiment": ["execute_python", "read_file", "write_file", "list_directory", "transition_to_phase"],
-    "analysis":   ["execute_python", "read_file", "write_file", "transition_to_phase"],
-    "writing":    ["read_file", "write_file", "read_latex", "compile_latex", "transition_to_phase"],
-}
 
 class MCPClient:
     def __init__(self, config_path: str = "mcp/servers.yaml"):
@@ -601,6 +606,50 @@ class MCPClient:
             }
         }
 ```
+
+#### 3.5.2 Tools 层（LLM 可调用函数接口）
+
+Tools 是 LLM 通过 `tool_use` 机制实际调用的函数。它们分为两类：
+
+| 类型 | 来源 | 示例 |
+|------|------|------|
+| **MCP 工具** | 由外部 MCP Server 暴露，通过 MCP 协议调用 | `arxiv_search`、`read_file`、`execute_python` |
+| **内部工具** | Agent 自身实现，不经过 MCP 协议 | `transition_to_phase`（阶段切换） |
+
+每个 Tool 都有标准的 JSON Schema 定义（`name` + `description` + `input_schema`），统一喂给 LLM 的 `tools` 参数。LLM 不知道也不关心某个 Tool 背后是 MCP Server 还是内部实现。
+
+**阶段工具权限表**（由 Skills 层控制哪些 Tools 在哪个阶段可用）：
+
+```python
+PHASE_TOOL_PERMISSIONS = {
+    "survey":     ["arxiv_search", "web_search", "read_file", "write_file", "transition_to_phase"],
+    "literature": ["arxiv_search", "download_paper", "read_pdf", "read_file", "write_file", "transition_to_phase"],
+    "arguments":  ["read_file", "write_file", "transition_to_phase"],
+    "innovation": ["read_file", "write_file", "transition_to_phase"],
+    "experiment": ["execute_python", "read_file", "write_file", "list_directory", "transition_to_phase"],
+    "analysis":   ["execute_python", "read_file", "write_file", "transition_to_phase"],
+    "writing":    ["read_file", "write_file", "read_latex", "compile_latex", "transition_to_phase"],
+}
+```
+
+#### 3.5.3 Skills 层（阶段 Prompt 与角色定义）
+
+Skills 是本项目中最高层的抽象。每个 Skill 对应一个研究阶段，由一个 Markdown 文件定义（`agent/prompts/phase_*.md`），包含：
+
+1. **角色定义**：Agent 在该阶段扮演什么身份（如"经验丰富的算法工程师"）
+2. **工作流程**：该阶段的具体步骤指引
+3. **可用工具列表**：该阶段被授权使用的 Tools（见上方权限表）
+4. **切换条件**：何时可以调用 `transition_to_phase` 进入下一阶段
+
+Skill 通过 `StateMachine.get_current_system_prompt()` 动态注入到 LLM 的 `system` 参数中。阶段切换时，旧 Skill 被替换为新 Skill，Agent 的角色和能力随之改变。
+
+```
+base_system.md（通用人设）+ phase_XX_xxx.md（阶段 Skill）
+         ↓ 拼接后注入
+   LLM system prompt
+```
+
+**Skill 与 Tool 的协作关系**：Skill 决定"做什么"和"怎么做"，Tool 是"用什么做"。Skill 通过 `PHASE_TOOL_PERMISSIONS` 控制每个阶段能用哪些 Tool，而 `transition_to_phase` 这个 Tool 又反过来触发 Skill 的切换。
 
 ---
 
@@ -797,18 +846,17 @@ servers:
 
 ### Token 预算分配（以 200K context 为例）
 
-```
-┌─────────────────────────────────────────────────┐
-│  System Prompt          ~  5,000 tokens  (2.5%) │
-│  工具 Schema            ~  3,000 tokens  (1.5%) │
-│  核心记忆（头部）         ~  5,000 tokens  (2.5%) │
-│  近期对话（尾部20条）     ~ 30,000 tokens   (15%) │
-│  压缩摘要               ~ 10,000 tokens    (5%)  │
-│  ████████ 安全缓冲区 ████████                    │
-│  max_tokens 输出         ~  8,000 tokens    (4%) │
-└─────────────────────────────────────────────────┘
-     软压缩阈值：140,000 tokens（70%）
-```
+| 区域 | 预算 | 占比 |
+|------|------|------|
+| System Prompt（基础 + 阶段 Skill） | ~5,000 tokens | 2.5% |
+| Tools Schema（MCP + 内部工具） | ~3,000 tokens | 1.5% |
+| 核心记忆（头部） | ~5,000 tokens | 2.5% |
+| 近期对话（尾部 20 条） | ~30,000 tokens | 15% |
+| 压缩摘要 | ~10,000 tokens | 5% |
+| 安全缓冲区 | — | ~69.5% |
+| max_tokens 输出 | ~8,000 tokens | 4% |
+
+> 软压缩阈值：140,000 tokens（70%）
 
 ### 防止上下文爆炸的最佳实践
 

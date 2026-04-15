@@ -48,29 +48,41 @@ Most "AI research tools" are sophisticated wrappers around a fixed pipeline — 
 
 ## 🏗️ Architecture
 
+```mermaid
+graph TD
+    subgraph Core["DeepScholar Core"]
+        direction TB
+
+        subgraph Skills["Skills Layer — Phase Prompts & Role Definitions"]
+            SM["State Machine (7 Phases)"]
+            SP["System Prompt Hot-Swap Engine<br/>(phase_01~07.md)"]
+        end
+
+        subgraph Tools["Tools Layer — LLM-Callable Function Interfaces"]
+            Loop["REPL Loop (loop.py)"]
+            Bus["JSONL Bus (Append-Only)"]
+            Ctx["Context Manager (3-tier)"]
+            TT["transition_to_phase<br/>(internal tool)"]
+        end
+
+        subgraph MCP["MCP Layer — Protocol & External Servers"]
+            Client["MCP Client (Dynamic Tool Discovery)"]
+        end
+
+        Loop --> SM
+        SM --> SP
+        Loop --> Bus
+        Loop --> Ctx
+        Loop --> Client
+        SM --> TT
+    end
+
+    Client -- "MCP Protocol" --> Arxiv["Arxiv Server"]
+    Client -- "MCP Protocol" --> FS["FileSystem Server"]
+    Client -- "MCP Protocol" --> Py["Python Interpreter"]
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                        DeepScholar Core                          │
-│                                                                  │
-│   ┌─────────────┐    ┌──────────────┐    ┌───────────────────┐  │
-│   │  REPL Loop  │───▶│ State Machine│───▶│  System Prompt    │  │
-│   │  (loop.py)  │    │ (7 Phases)   │    │  Hot-Swap Engine  │  │
-│   └──────┬──────┘    └──────────────┘    └───────────────────┘  │
-│          │                                                       │
-│   ┌──────▼──────┐    ┌──────────────┐    ┌───────────────────┐  │
-│   │ JSONL Bus   │    │  Context     │    │  MCP Client       │  │
-│   │ (Append-    │    │  Manager     │    │  (Dynamic Tool    │  │
-│   │  Only)      │    │  (3-tier)    │    │   Discovery)      │  │
-│   └─────────────┘    └──────────────┘    └────────┬──────────┘  │
-└────────────────────────────────────────────────────┼────────────┘
-                                                     │ MCP Protocol
-                    ┌────────────────────────────────┤
-                    │                │               │
-           ┌────────▼──┐   ┌─────────▼──┐   ┌───────▼──────┐
-           │  Arxiv    │   │ FileSystem │   │   Python     │
-           │  Server   │   │   Server   │   │  Interpreter │
-           └───────────┘   └────────────┘   └──────────────┘
-```
+
+> **Three-layer capability model**: **MCP** (protocol & external servers) → **Tools** (callable function interfaces for the LLM) → **Skills** (phase-specific prompts that define the agent's role and available tools at each stage).
 
 ### Core Design Principles
 
@@ -83,8 +95,11 @@ Every LLM response, every tool result, every phase transition is immediately flu
 **3 — Model-Driven State Machine**
 Research phases don't advance on a timer or a counter — the model calls `transition_to_phase()` when *it* decides the current phase is complete. This is the key to non-linear research behavior.
 
-**4 — MCP-First Tooling**
-Tools are not hardcoded. On startup, the agent sends `tools/list` to each configured MCP server and dynamically loads their schemas. Swap, add, or remove tool servers without touching agent code.
+**4 — Three-Layer Capability Architecture (MCP / Tools / Skills)**
+These three concepts are distinct and must not be conflated:
+- **MCP** is the transport layer — it manages connections to external server processes and the protocol for discovering and calling their capabilities.
+- **Tools** are the callable function interfaces exposed to the LLM via `tool_use`. Some are backed by MCP servers (e.g. `arxiv_search`), others are internal (e.g. `transition_to_phase`).
+- **Skills** are the phase-specific system prompts (`phase_01~07.md`) that define the agent's role, workflow instructions, and tool permissions at each research stage.
 
 ---
 
@@ -188,9 +203,9 @@ uv run python main.py --list-runs
 
 ---
 
-## 🔌 Tool Ecosystem (MCP Servers)
+## 🔌 MCP Server Ecosystem
 
-Configure tool servers in `mcp/servers.yaml`. The agent discovers all tools on startup.
+MCP servers are the external processes that provide tool capabilities via the MCP protocol. Configure them in `mcp/servers.yaml` — the agent discovers all tools on startup.
 
 | Server | Purpose | Install |
 |--------|---------|---------|
@@ -233,9 +248,9 @@ while True:
 
 That's the entire orchestration engine. Every other file is infrastructure.
 
-### Phase-Gated Tool Permissions
+### Phase-Gated Tool Permissions (Skills → Tools)
 
-The agent only sees tools relevant to its current phase. An agent in the `literature` phase cannot call `execute_python`. An agent in `experiment` cannot call `arxiv_search`. This prevents capability leakage and keeps the model focused.
+Each **Skill** (phase prompt) controls which **Tools** the agent can access. An agent in the `literature` phase cannot call `execute_python`. An agent in `experiment` cannot call `arxiv_search`. This prevents capability leakage and keeps the model focused.
 
 ```python
 PHASE_TOOL_PERMISSIONS = {

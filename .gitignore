@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+build/
+workspace/runs/
+workspace/papers/
+*.pdf
+.DS_Store

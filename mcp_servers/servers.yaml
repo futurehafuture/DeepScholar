@@ -1,0 +1,27 @@
+# MCP Server configuration for DeepScholar.
+# The agent discovers tools from these servers at startup.
+# Add/remove servers here without changing any agent code.
+
+servers:
+  # Local filesystem — scoped to ./workspace to prevent writes outside the workspace
+  filesystem:
+    command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "./workspace"]
+    description: "Read/write files within the workspace directory"
+
+  # Arxiv paper search and download
+  arxiv:
+    command: ["uvx", "arxiv-mcp-server"]
+    description: "Search and download academic papers from Arxiv"
+
+  # Python code execution for experiments
+  # Note: install with `uvx mcp-code-executor` — uncomment when available
+  # python:
+  #   command: ["uvx", "mcp-code-executor"]
+  #   description: "Execute Python code for experiments and data analysis"
+
+  # Web search (optional — requires BRAVE_API_KEY in .env)
+  # brave_search:
+  #   command: ["npx", "-y", "@modelcontextprotocol/server-brave-search"]
+  #   description: "Web search for supplementary context"
+  #   env:
+  #     BRAVE_API_KEY: "${BRAVE_API_KEY}"

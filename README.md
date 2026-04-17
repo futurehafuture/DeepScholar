@@ -168,10 +168,23 @@ Tier 3 — Hard Compression (at max_tokens)
 ## ⚡ Quick Start
 
 ### Prerequisites
-- Python 3.11+
-- [`uv`](https://github.com/astral-sh/uv) package manager
-- Anthropic API key
-- Node.js (for MCP filesystem server)
+
+**Python 3.11+**
+
+**uv** (package manager)
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**Node.js 18+** (required for the filesystem MCP server)
+```bash
+# macOS
+brew install node
+
+# or download from https://nodejs.org
+```
+
+**Zhipu AI API Key** — get one at [bigmodel.cn](https://bigmodel.cn)
 
 ### Installation
 
@@ -179,7 +192,7 @@ Tier 3 — Hard Compression (at max_tokens)
 git clone https://github.com/yourname/deepscholar
 cd deepscholar
 uv sync
-cp .env.example .env   # add your ANTHROPIC_API_KEY
+cp .env.example .env   # add your ZHIPUAI_API_KEY
 ```
 
 ### Start a New Research Run

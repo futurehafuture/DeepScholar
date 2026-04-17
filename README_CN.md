@@ -168,10 +168,23 @@ workspace/runs/{run_id}/
 ## ⚡ 快速开始
 
 ### 环境要求
-- Python 3.11+
-- [`uv`](https://github.com/astral-sh/uv) 包管理器
-- Anthropic API Key
-- Node.js（用于 MCP 文件系统服务器）
+
+**Python 3.11+**
+
+**uv**（包管理器）
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**Node.js 18+**（filesystem MCP server 依赖）
+```bash
+# macOS
+brew install node
+
+# 或从 https://nodejs.org 下载安装包
+```
+
+**智谱 AI API Key** — 在 [bigmodel.cn](https://bigmodel.cn) 控制台获取
 
 ### 安装
 
@@ -179,7 +192,7 @@ workspace/runs/{run_id}/
 git clone https://github.com/yourname/deepscholar
 cd deepscholar
 uv sync
-cp .env.example .env   # 填入你的 ANTHROPIC_API_KEY
+cp .env.example .env   # 填入你的 ZHIPUAI_API_KEY
 ```
 
 ### 启动新的研究任务
